@@ -30,6 +30,7 @@ import io.projectdiscovery.nuclei.model.util.TransformedRequest;
 import io.projectdiscovery.nuclei.yaml.YamlUtil;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.yaml.snakeyaml.error.YAMLException;
 
 class YamlUtilTest {
 
@@ -235,5 +236,16 @@ class YamlUtilTest {
         requests.setMatchers(new Word("word1", "word2"),
                              new Status(200, 500));
         return requests;
+    }
+
+    @Test
+    void testGlobalTagsAreRejected() {
+        // SnakeYAML 2.x defaults to UnTrustedTagInspector, so a '!!' tag naming an
+        // arbitrary class cannot instantiate it. Locked in because YamlUtil builds
+        // its own LoaderOptions, and a permissive one here would be a deserialization hole.
+        final String template = "id: evil\n" +
+                                "info: !!javax.script.ScriptEngineManager []\n";
+
+        Assertions.assertThrows(YAMLException.class, () -> YamlUtil.load(template, Template.class));
     }
 }

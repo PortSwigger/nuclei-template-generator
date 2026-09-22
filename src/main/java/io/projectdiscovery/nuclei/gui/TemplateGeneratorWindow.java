@@ -51,6 +51,7 @@ public final class TemplateGeneratorWindow extends JFrame implements TemplateGen
     public void addTab(TemplateGeneratorTab templateGeneratorTab) {
         this.setVisible(true);
         this.tabbedPane.addTab(templateGeneratorTab);
+        this.toFront(); // setVisible does not raise a window that is already visible but behind others
     }
 
     @Override
@@ -113,6 +114,8 @@ public final class TemplateGeneratorWindow extends JFrame implements TemplateGen
                                 "  author: forgedhallpass\n" +
                                 "  name: Template Name\n" +
                                 "  severity: info\n" +
+                                "reference:\n"+
+                                "   - https://github.com/projectdiscovery/nuclei-templates\n"+
                                 "http:\n" +
                                 "  - raw:\n" +
                                 "    - |\n" +

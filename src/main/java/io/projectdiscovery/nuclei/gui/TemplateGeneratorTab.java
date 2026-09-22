@@ -20,15 +20,20 @@ import org.fife.ui.rtextarea.RTextScrollPane;
 import org.yaml.snakeyaml.error.YAMLException;
 
 import javax.swing.*;
+import javax.swing.event.MouseInputAdapter;
+import javax.swing.text.BadLocationException;
 import javax.swing.text.JTextComponent;
 import java.awt.*;
 import java.awt.datatransfer.Clipboard;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
+import java.awt.event.MouseEvent;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -121,14 +126,14 @@ public final class TemplateGeneratorTab extends JPanel {
         }
 
         return String.format("%s -v -t %s -u %s",
-                             wrapWithQuotesIfNecessary(nucleiPath.toString()),
-                             wrapWithQuotesIfNecessary(this.templatePath.toString()),
-                             wrapWithQuotesIfNecessary(targetUrl.toString()));
+                wrapWithQuotesIfNecessary(nucleiPath.toString()),
+                wrapWithQuotesIfNecessary(this.templatePath.toString()),
+                wrapWithQuotesIfNecessary(targetUrl.toString()));
     }
 
     private static String wrapWithQuotesIfNecessary(String input) {
         return input.contains(" ") ? String.format("\"%s\"", input)
-                                   : input;
+                : input;
     }
 
     private void setKeyboardShortcuts() {
@@ -249,7 +254,67 @@ public final class TemplateGeneratorTab extends JPanel {
 
         setupAutoCompletion(textEditor);
 
+        // Add mouse listener for Ctrl + Click
+        textEditor.addMouseListener(new MouseInputAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 1 && e.isControlDown()) { // Trigger on Ctrl + Click
+                    final int offset = textEditor.viewToModel2D(e.getPoint());
+                    final String url = getUrlAtOffset(textEditor, offset);
+                    if (url != null) {
+                        openLinkWithConfirmation(url);
+                    }
+                }
+            }
+        });
+
         return textEditor;
+    }
+
+    private String getUrlAtOffset(RSyntaxTextArea textEditor, int offset) {
+        try {
+            int start = offset;
+            int end = offset;
+            while (start > 0 && !Character.isWhitespace(textEditor.getText(start - 1, 1).charAt(0))) {
+                start--;
+            }
+            while (end < textEditor.getDocument().getLength() && !Character.isWhitespace(textEditor.getText(end, 1).charAt(0))) {
+                end++;
+            }
+
+            final String potentialUrl = Utils.stripYamlDelimiters(textEditor.getText(start, end - start));
+            if (potentialUrl.startsWith("http://") || potentialUrl.startsWith("https://")) {
+                return potentialUrl;
+            }
+        } catch (BadLocationException e) {
+            this.nucleiGeneratorSettings.logError("Could not read the clicked text from the template editor", e);
+        }
+        return null;
+    }
+
+    /**
+     * A template can carry URLs that came from a scanned response or a CVE reference, so a
+     * link to a local service is confirmed before the analyst's browser is pointed at it.
+     */
+    private void openLinkWithConfirmation(String url) {
+        try {
+            final URL parsedUrl = new URI(url).toURL();
+
+            if (Utils.isLocalAddress(parsedUrl.getHost())) {
+                final int choice = JOptionPane.showConfirmDialog(this,
+                                                                 String.format("This link points to a local address:%n%s%n%nOpen it anyway?", parsedUrl),
+                                                                 "Local address",
+                                                                 JOptionPane.YES_NO_OPTION,
+                                                                 JOptionPane.WARNING_MESSAGE);
+                if (choice != JOptionPane.YES_OPTION) {
+                    return;
+                }
+            }
+
+            SwingUtils.openWebPage(parsedUrl);
+        } catch (IOException | URISyntaxException | IllegalArgumentException e) {
+            this.nucleiGeneratorSettings.logError(String.format("Could not open '%s'", url), e);
+        }
     }
 
     private JMenu createTemplateEditorMenuItems() {
@@ -276,34 +341,61 @@ public final class TemplateGeneratorTab extends JPanel {
     private JMenuItem createCveClassificationMenuItem() {
         final JMenuItem cveMenuItem = new JMenuItem("CVE");
 
-        cveMenuItem.addActionListener(e -> modifyTemplate(template -> {
+        cveMenuItem.addActionListener(e -> {
             final String cveId = JOptionPane.showInputDialog("Enter CVE ID (e.g. CVE-2021-1234):", "CVE-");
-
-            if (cveId != null) {
-                if (cveId.matches("(?i)cve-\\d{4}-\\d{4,7}")) {
-                    final Optional<CveInfo> cveInfo = CveInfoRetriever.getCveInfo(cveId);
-                    cveInfo.map(cve -> {
-                        template.setId(cveId);
-                        final Info.Classification classification = new Info.Classification(cve.getId(), cve.getCvssMetrics(), cve.getCvssScore(), cve.getCweIds());
-                        final Info templateInfo = template.getInfo();
-                        templateInfo.setSeverity(cve.getSeverity());
-                        templateInfo.setDescriptionIfDefault(cve.getDescription());
-                        templateInfo.setReference(cve.getReferences());
-                        templateInfo.setClassification(classification);
-                        templateInfo.setTags(List.of("cve", cveId.substring(0, "cve-1234".length()).replace("-", "").toLowerCase())); // add cve and cveYEAR tags
-                        return template;
-                    }).orElseGet(() -> {
-                        JOptionPane.showMessageDialog(null, "Could not find CVE information. Please fill it manually.", "Could not find CVE information.", JOptionPane.WARNING_MESSAGE);
-                        template.getInfo().setClassification(new Info.Classification());
-                        return template;
-                    });
-                } else {
-                    JOptionPane.showMessageDialog(null, "Invalid CVE ID. Please use the CVE-2021-1234 format.", "Invalid CVE ID", JOptionPane.ERROR_MESSAGE);
-                }
+            if (cveId == null) {
+                return;
             }
-        }));
+
+            if (!cveId.matches("(?i)cve-\\d{4}-\\d{4,7}")) {
+                JOptionPane.showMessageDialog(this, "Invalid CVE ID. Please use the CVE-2021-1234 format.", "Invalid CVE ID", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
+            // The NVD lookup goes over the network, so it must not run on the event thread,
+            // otherwise the whole Burp UI freezes until it returns or times out.
+            cveMenuItem.setEnabled(false);
+            new SwingWorker<Optional<CveInfo>, Void>() {
+                @Override
+                protected Optional<CveInfo> doInBackground() {
+                    return CveInfoRetriever.getCveInfo(cveId, TemplateGeneratorTab.this.nucleiGeneratorSettings);
+                }
+
+                @Override
+                protected void done() {
+                    try {
+                        applyCveInfo(cveId, get());
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                        TemplateGeneratorTab.this.nucleiGeneratorSettings.logError(String.format("Interrupted while retrieving '%s'", cveId), ex);
+                    } catch (ExecutionException ex) {
+                        TemplateGeneratorTab.this.nucleiGeneratorSettings.logError(String.format("Could not retrieve '%s'", cveId), ex);
+                    } finally {
+                        cveMenuItem.setEnabled(true);
+                    }
+                }
+            }.execute();
+        });
 
         return cveMenuItem;
+    }
+
+    private void applyCveInfo(String cveId, Optional<CveInfo> cveInfo) {
+        modifyTemplate(template -> cveInfo.map(cve -> {
+            template.setId(cveId);
+            final Info.Classification classification = new Info.Classification(cve.getId(), cve.getCvssMetrics(), cve.getCvssScore(), cve.getCweIds());
+            final Info templateInfo = template.getInfo();
+            templateInfo.setSeverity(cve.getSeverity());
+            templateInfo.setDescriptionIfDefault(cve.getDescription());
+            templateInfo.setReference(cve.getReferences());
+            templateInfo.setClassification(classification);
+            templateInfo.setTags(List.of("cve", cveId.substring(0, "cve-1234".length()).replace("-", "").toLowerCase())); // add cve and cveYEAR tags
+            return template;
+        }).orElseGet(() -> {
+            JOptionPane.showMessageDialog(this, "Could not find CVE information. Please fill it manually.", "Could not find CVE information.", JOptionPane.WARNING_MESSAGE);
+            template.getInfo().setClassification(new Info.Classification());
+            return template;
+        }));
     }
 
     private void modifyTemplate(Consumer<Template> templateConsumer) {
@@ -425,8 +517,9 @@ public final class TemplateGeneratorTab extends JPanel {
             if (Utils.isBlank(templateId)) {
                 JOptionPane.showMessageDialog(this, "Missing mandatory template id!", "Template error", JOptionPane.ERROR_MESSAGE);
             } else {
-                final Path generatedFilePath = targetTemplatePath.resolve(templateId + ".yaml");
-                saveTemplateToFile(generatedFilePath, yamlTemplate);
+                NucleiUtils.toSafeFileName(templateId)
+                           .ifPresentOrElse(fileName -> saveTemplateToFile(targetTemplatePath.resolve(fileName + ".yaml"), yamlTemplate),
+                                            () -> JOptionPane.showMessageDialog(this, "The template id cannot be used as a file name!", "Template error", JOptionPane.ERROR_MESSAGE));
             }
         });
     }
@@ -476,8 +569,8 @@ public final class TemplateGeneratorTab extends JPanel {
                 final File selectedFile = getSelectedFile();
                 if (selectedFile.exists() && getDialogType() == SAVE_DIALOG) {
                     final int result = JOptionPane.showConfirmDialog(this, "The selected file already exists. Do you want to overwrite it?",
-                                                                     "Overwrite existing file?",
-                                                                     JOptionPane.YES_NO_CANCEL_OPTION);
+                            "Overwrite existing file?",
+                            JOptionPane.YES_NO_CANCEL_OPTION);
                     switch (result) {
                         case JOptionPane.YES_OPTION:
                             super.approveSelection();
@@ -511,14 +604,14 @@ public final class TemplateGeneratorTab extends JPanel {
             }
 
             CommandLineUtils.asyncExecuteCommand(command,
-                                                 bufferedReader -> bufferedReader.lines()
-                                                                                 .map(line -> line + "\n")
-                                                                                 .forEach(line -> SwingUtilities.invokeLater(() -> {
-                                                                                     this.outputPane.appendText(line, noColor);
-                                                                                     this.outputPane.repaint();
-                                                                                 })),
-                                                 exitCode -> SwingUtilities.invokeLater(() -> this.outputPane.appendText("\nThe process exited with code " + exitCode)),
-                                                 this.nucleiGeneratorSettings::logError);
+                    bufferedReader -> bufferedReader.lines()
+                            .map(line -> line + "\n")
+                            .forEach(line -> SwingUtilities.invokeLater(() -> {
+                                this.outputPane.appendText(line, noColor);
+                                this.outputPane.repaint();
+                            })),
+                    exitCode -> SwingUtilities.invokeLater(() -> this.outputPane.appendText("\nThe process exited with code " + exitCode)),
+                    this.nucleiGeneratorSettings::logError);
         }
     }
 }

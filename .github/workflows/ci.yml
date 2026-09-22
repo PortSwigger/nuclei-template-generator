@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  release:
+    # Not 'created': GitHub does not fire that for draft releases, so publishing a
+    # prepared draft would leave the release without a jar.
+    types: [ published ]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      # The tag is the only source of truth for the released version. Nothing is
+      # committed back to main, so a release can no longer rewrite the branch,
+      # and the artifact can never ship as a SNAPSHOT.
+      - name: Resolve version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mvn --batch-mode org.codehaus.mojo:versions-maven-plugin:2.18.0:set \
+            -DnewVersion="$VERSION" -DgenerateBackupPoms=false
+          mvn --batch-mode verify
+          mv "target/nuclei-burp-plugin-$VERSION-jar-with-dependencies.jar" \
+             "nuclei-burp-plugin-$VERSION.jar"
+
+      - name: Attach jar to release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: nuclei-burp-plugin-${{ steps.version.outputs.version }}.jar

@@ -1,0 +1,63 @@
+name: Reopen BApp submission
+
+# PortSwigger closes the submission issue when they leave review feedback, and asks
+# for a comment starting with /reopen once it is addressed. Doing that by hand means
+# signing in as the submitting account, so it runs here instead.
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: 'Which command to post'
+        required: true
+        default: '/reopen'
+        type: choice
+        options:
+          - '/reopen'
+          - '/resubmit'
+      issue:
+        description: 'Submission issue number on PortSwigger/extension-portal. Leave empty to use the most recent one.'
+        required: false
+      note:
+        description: 'Optional note to add under the command'
+        required: false
+
+permissions: {}
+
+env:
+  PORTAL: PortSwigger/extension-portal
+  BAPP_NAME: Nuclei Template Generator Plugin
+
+jobs:
+  reopen:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Post the command on the submission issue
+        env:
+          GH_TOKEN: ${{ secrets.PDTEAMX_CLASSIC_PAT }}
+          COMMAND: ${{ inputs.command }}
+          ISSUE: ${{ inputs.issue }}
+          NOTE: ${{ inputs.note }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$ISSUE" ]; then
+            ISSUE=$(gh issue list --repo "$PORTAL" --state all --limit 1 \
+                                  --search "\"$BAPP_NAME\" in:title sort:created-desc" \
+                                  --json number --jq '.[0].number // empty')
+          fi
+
+          if [ -z "$ISSUE" ]; then
+            echo "::error::No submission issue found on $PORTAL for '$BAPP_NAME'."
+            exit 1
+          fi
+
+          # The command has to be the first thing in the comment for them to pick it up.
+          if [ -n "$NOTE" ]; then
+            body=$(printf '%s\n\n%s' "$COMMAND" "$NOTE")
+          else
+            body="$COMMAND"
+          fi
+
+          echo "Posting '$COMMAND' on $PORTAL#$ISSUE"
+          gh issue comment "$ISSUE" --repo "$PORTAL" --body "$body"

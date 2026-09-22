@@ -30,6 +30,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.function.Consumer;
@@ -37,7 +38,19 @@ import java.util.function.Function;
 
 public final class CommandLineUtils {
 
+    // One shared pool instead of a new executor per invocation, so the threads can be
+    // shut down on extension unload rather than accumulating across load cycles.
+    private static final ExecutorService EXECUTOR = Executors.newCachedThreadPool(runnable -> {
+        final Thread thread = new Thread(runnable, "nuclei-command");
+        thread.setDaemon(true);
+        return thread;
+    });
+
     private CommandLineUtils() {
+    }
+
+    public static void shutdown() {
+        EXECUTOR.shutdownNow();
     }
 
     public static <T> ExecutionResult<T> executeCommand(String[] command, Function<BufferedReader, T> processOutputFunction) throws ExecutionException {
@@ -68,7 +81,7 @@ public final class CommandLineUtils {
         final ProcessBuilder processBuilder = new ProcessBuilder(command);
         processBuilder.redirectErrorStream(true);
 
-        final Future<Integer> commandFuture = Executors.newSingleThreadExecutor().submit(() -> {
+        final Future<Integer> commandFuture = EXECUTOR.submit(() -> {
             final Process process;
             try {
                 process = processBuilder.start();
@@ -85,7 +98,7 @@ public final class CommandLineUtils {
             }
         });
 
-        Executors.newSingleThreadExecutor().submit(() -> {
+        EXECUTOR.submit(() -> {
             int commandCode;
             try {
                 commandCode = commandFuture.get();

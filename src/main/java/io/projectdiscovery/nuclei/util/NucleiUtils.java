@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.lang.reflect.Type;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Paths;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -100,5 +101,27 @@ public final class NucleiUtils {
 
     static TemplateMatcher.Part getSelectionPart(int bodyOffset, int fromIndex) {
         return (bodyOffset != -1) && (fromIndex < bodyOffset) ? TemplateMatcher.Part.header : TemplateMatcher.Part.body;
+    }
+
+    /**
+     * Reduces a user supplied template id to a bare file name.
+     * <p>
+     * A template id comes from the editable template, so an id such as {@code ../../evil}
+     * would otherwise resolve outside the configured templates directory.
+     *
+     * @return the file name, or an empty {@link Optional} if the id yields no usable name
+     */
+    public static Optional<String> toSafeFileName(String templateId) {
+        if (Utils.isBlank(templateId)) {
+            return Optional.empty();
+        }
+
+        try {
+            return Optional.ofNullable(Paths.get(templateId).getFileName())
+                           .map(Path::toString)
+                           .filter(fileName -> !fileName.isBlank() && !".".equals(fileName) && !"..".equals(fileName));
+        } catch (InvalidPathException e) {
+            return Optional.empty();
+        }
     }
 }

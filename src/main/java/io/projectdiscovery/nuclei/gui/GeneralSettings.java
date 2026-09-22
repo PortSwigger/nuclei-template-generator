@@ -38,6 +38,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import java.util.function.BiConsumer;
+import java.net.URI;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -47,8 +48,10 @@ public class GeneralSettings {
     private final Consumer<String> errorConsumer;
     private final BiConsumer<String, String> extensionSettingSaver;
     private final Function<String, String> extensionSettingLoader;
+    private final Function<URI, Optional<String>> httpGetter;
 
     GeneralSettings(GeneralSettings generalSettings) {
+        this.httpGetter = generalSettings.httpGetter;
         this.outputConsumer = generalSettings.outputConsumer;
         this.errorConsumer = generalSettings.errorConsumer;
         this.extensionSettingSaver = generalSettings.extensionSettingSaver;
@@ -56,6 +59,7 @@ public class GeneralSettings {
     }
 
     private GeneralSettings(Builder builder) {
+        this.httpGetter = builder.httpGetter;
         this.outputConsumer = builder.outputConsumer;
         this.errorConsumer = builder.errorConsumer;
         this.extensionSettingSaver = builder.extensionSettingSaver;
@@ -121,6 +125,12 @@ public class GeneralSettings {
         private Consumer<String> outputConsumer;
         private BiConsumer<String, String> extensionSettingSaver;
         private Function<String, String> extensionSettingLoader;
+        private Function<URI, Optional<String>> httpGetter;
+
+        public Builder withHttpGetter(Function<URI, Optional<String>> httpGetter) {
+            this.httpGetter = httpGetter;
+            return this;
+        }
 
         public Builder withErrorConsumer(Consumer<String> errorConsumer) {
             this.errorConsumer = errorConsumer;
@@ -165,5 +175,13 @@ public class GeneralSettings {
 
     private static String addTimePrefix(String content) {
         return String.format("[%s] %s", DateTimeFormatter.ISO_LOCAL_TIME.format(LocalTime.now().truncatedTo(ChronoUnit.SECONDS)), content);
+    }
+
+    /**
+     * @return the HTTP getter for outbound requests, empty when running outside Burp.
+     * Requests sent through it honour the upstream proxy configured in Burp.
+     */
+    public Optional<Function<URI, Optional<String>>> getHttpGetter() {
+        return Optional.ofNullable(this.httpGetter);
     }
 }

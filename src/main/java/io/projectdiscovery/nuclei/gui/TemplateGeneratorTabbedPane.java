@@ -31,12 +31,27 @@ import java.awt.event.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class TemplateGeneratorTabbedPane extends JTabbedPane {
+
+    // One shared pool instead of a new executor per closed tab, so the threads can be
+    // shut down on extension unload rather than accumulating across load cycles.
+    private static final ExecutorService CLEANUP_EXECUTOR = Executors.newCachedThreadPool(runnable -> {
+        final Thread thread = new Thread(runnable, "nuclei-tab-cleanup");
+        thread.setDaemon(true);
+        return thread;
+    });
+
     private final List<TemplateGeneratorTab> templateGeneratorTabs;
+    private final GeneralSettings generalSettings;
 
     private int openedTabCounter = 1;
+
+    public static void shutdown() {
+        CLEANUP_EXECUTOR.shutdownNow();
+    }
 
     TemplateGeneratorTabbedPane(GeneralSettings generalSettings) {
         this(generalSettings, new ArrayList<>(), () -> {
@@ -50,6 +65,7 @@ public final class TemplateGeneratorTabbedPane extends JTabbedPane {
     private TemplateGeneratorTabbedPane(GeneralSettings generalSettings, List<TemplateGeneratorTab> templateGeneratorTabs, Runnable closeAction) {
         super(TOP, SCROLL_TAB_LAYOUT);
         this.templateGeneratorTabs = templateGeneratorTabs;
+        this.generalSettings = generalSettings;
 
         this.addChangeListener(e -> {
             if (((JTabbedPane) e.getSource()).getTabCount() == 0) {
@@ -67,8 +83,22 @@ public final class TemplateGeneratorTabbedPane extends JTabbedPane {
     }
 
     public void cleanup() {
-        Executors.newSingleThreadExecutor().submit(() -> this.templateGeneratorTabs.forEach(TemplateGeneratorTab::cleanup));
+        submitCleanup(() -> this.templateGeneratorTabs.forEach(TemplateGeneratorTab::cleanup));
         this.removeAll();
+    }
+
+    /**
+     * Cleanup touches the file system, so it is kept off the event thread. Failures are
+     * logged rather than dropped, because a lost exception here means a leaked resource.
+     */
+    private void submitCleanup(Runnable cleanup) {
+        CLEANUP_EXECUTOR.submit(() -> {
+            try {
+                cleanup.run();
+            } catch (RuntimeException e) {
+                this.generalSettings.logError("Error while cleaning up a template generator tab", e);
+            }
+        });
     }
 
     public void addTab(TemplateGeneratorTab templateGeneratorTab) {
@@ -166,7 +196,8 @@ public final class TemplateGeneratorTabbedPane extends JTabbedPane {
     @Override
     public void remove(int index) {
         if (index >= 0) {
-            Executors.newSingleThreadExecutor().submit(() -> this.templateGeneratorTabs.get(index).cleanup());
+            final TemplateGeneratorTab removedTab = this.templateGeneratorTabs.get(index);
+            submitCleanup(removedTab::cleanup);
             super.remove(index);
             this.templateGeneratorTabs.remove(index);
         }

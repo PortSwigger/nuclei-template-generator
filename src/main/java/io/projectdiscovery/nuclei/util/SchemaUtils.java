@@ -36,6 +36,7 @@ import java.io.InputStreamReader;
 import java.lang.reflect.Type;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.net.URLConnection;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -50,6 +51,8 @@ public final class SchemaUtils {
     }
 
     private static final String NUCLEI_JSON_SCHEMA_FILE_NAME = "nuclei-jsonschema.json";
+    // Bounded, because this runs while Burp is loading the extension.
+    private static final int SCHEMA_TIMEOUT_MILLIS = 10_000;
     private static final String NUCLEI_JSON_SCHEMA_URL = "https://raw.githubusercontent.com/projectdiscovery/nuclei/master/" + NUCLEI_JSON_SCHEMA_FILE_NAME;
 
     public static Map<String, String> retrieveYamlFieldWithDescriptions(GeneralSettings generalSettings) {
@@ -57,13 +60,23 @@ public final class SchemaUtils {
 
         try {
             final URL jsonSchemaUrl = new URL(NUCLEI_JSON_SCHEMA_URL);
-            try (final InputStream inputStream = jsonSchemaUrl.openStream()) {
+            final URLConnection connection = jsonSchemaUrl.openConnection();
+            connection.setConnectTimeout(SCHEMA_TIMEOUT_MILLIS);
+            connection.setReadTimeout(SCHEMA_TIMEOUT_MILLIS);
+
+            try (final InputStream inputStream = connection.getInputStream()) {
                 result = yamlFieldDescriptionTransformer(inputStream, generalSettings);
             } catch (IOException e) {
                 result = retrieveYamlFieldWithDescriptionsFromDisk(generalSettings, e);
             }
         } catch (MalformedURLException e) {
             generalSettings.logError("Malformed URL: " + NUCLEI_JSON_SCHEMA_URL, e);
+        } catch (IOException e) {
+            result = retrieveYamlFieldWithDescriptionsFromDisk(generalSettings, e);
+        }
+
+        if (result.isEmpty()) {
+            result = retrieveBundledYamlFieldWithDescriptions(generalSettings);
         }
 
         return result;
@@ -145,5 +158,24 @@ public final class SchemaUtils {
             }
         }
         return result;
+    }
+
+    /**
+     * Last resort, so autocomplete still works on a first install with no network access.
+     * The bundled copy is only as current as the release.
+     */
+    private static Map<String, String> retrieveBundledYamlFieldWithDescriptions(GeneralSettings generalSettings) {
+        try (final InputStream inputStream = SchemaUtils.class.getResourceAsStream("/" + NUCLEI_JSON_SCHEMA_FILE_NAME)) {
+            if (inputStream == null) {
+                generalSettings.logError("The bundled nuclei JSON schema is missing from the extension.");
+                return Collections.emptyMap();
+            }
+
+            generalSettings.log("Falling back to the nuclei JSON schema bundled with the extension.");
+            return yamlFieldDescriptionTransformer(inputStream, generalSettings);
+        } catch (IOException e) {
+            generalSettings.logError("Could not read the bundled nuclei JSON schema", e);
+            return Collections.emptyMap();
+        }
     }
 }

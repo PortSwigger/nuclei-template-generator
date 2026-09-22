@@ -27,6 +27,8 @@ package io.projectdiscovery.nuclei.util;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+
+import java.util.Optional;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -87,5 +89,25 @@ class NucleiUtilsTest {
                                                    .collect(LinkedHashMap::new, (map, entry) -> map.put(entry.getKey(), entry.getValue()), HashMap::putAll);
 
         Assertions.assertEquals(expected, computedCliArgumentMap);
+    }
+
+    @Test
+    void testToSafeFileNameKeepsPlainIds() {
+        Assertions.assertEquals(Optional.of("cve-2021-44228"), NucleiUtils.toSafeFileName("cve-2021-44228"));
+    }
+
+    @Test
+    void testToSafeFileNameStripsTraversal() {
+        Assertions.assertEquals(Optional.of("evil"), NucleiUtils.toSafeFileName("../../evil"));
+        Assertions.assertEquals(Optional.of("passwd"), NucleiUtils.toSafeFileName("/etc/passwd"));
+        Assertions.assertEquals(Optional.of("evil"), NucleiUtils.toSafeFileName("subdir/evil"));
+    }
+
+    @Test
+    void testToSafeFileNameRejectsUnusableIds() {
+        Assertions.assertEquals(Optional.empty(), NucleiUtils.toSafeFileName(""));
+        Assertions.assertEquals(Optional.empty(), NucleiUtils.toSafeFileName("   "));
+        Assertions.assertEquals(Optional.empty(), NucleiUtils.toSafeFileName("/"));
+        Assertions.assertEquals(Optional.empty(), NucleiUtils.toSafeFileName(".."));
     }
 }

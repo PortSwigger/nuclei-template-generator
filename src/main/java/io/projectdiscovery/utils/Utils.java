@@ -25,6 +25,12 @@
 
 package io.projectdiscovery.utils;
 
+import java.util.Locale;
+
+import java.net.UnknownHostException;
+
+import java.net.InetAddress;
+
 import java.io.File;
 import java.io.FileWriter;
 import java.nio.charset.StandardCharsets;
@@ -94,5 +100,49 @@ public final class Utils {
     public static <T> List<T> createNewList(Collection<T> collection, T... elements) {
         return collection == null ? Arrays.asList(elements) : Stream.concat(Stream.of(elements), collection.stream())
                                                                     .collect(Collectors.toList());
+    }
+
+    private static final Pattern IPV4_LITERAL = Pattern.compile("^\\d{1,3}(\\.\\d{1,3}){3}$");
+    private static final Pattern LEADING_YAML_DELIMITERS = Pattern.compile("^[\"'\\[{(]+");
+    private static final Pattern TRAILING_YAML_DELIMITERS = Pattern.compile("[\"'\\]}),#]+$");
+
+    /**
+     * Trims the YAML punctuation that surrounds a value, so a URL picked out of a
+     * template by whitespace boundaries does not keep a trailing quote or comment marker.
+     */
+    public static String stripYamlDelimiters(String token) {
+        if (token == null) {
+            return null;
+        }
+
+        final String withoutLeading = LEADING_YAML_DELIMITERS.matcher(token).replaceFirst("");
+        return TRAILING_YAML_DELIMITERS.matcher(withoutLeading).replaceFirst("");
+    }
+
+    /**
+     * @return whether the host is loopback, private or link-local, and therefore should not be
+     * opened in a browser without asking. Host names are never resolved, because a DNS lookup
+     * here would both block the caller and leak the lookup.
+     */
+    public static boolean isLocalAddress(String host) {
+        if (isBlank(host)) {
+            return true;
+        }
+
+        final String normalized = host.toLowerCase(Locale.ROOT).replaceAll("^\\[|\\]$", "");
+        if ("localhost".equals(normalized) || normalized.endsWith(".localhost") || "::1".equals(normalized)) {
+            return true;
+        }
+
+        if (!IPV4_LITERAL.matcher(normalized).matches()) {
+            return false;
+        }
+
+        try {
+            final InetAddress address = InetAddress.getByName(normalized);
+            return address.isLoopbackAddress() || address.isSiteLocalAddress() || address.isLinkLocalAddress() || address.isAnyLocalAddress();
+        } catch (UnknownHostException e) {
+            return true;
+        }
     }
 }
