@@ -2,12 +2,12 @@ Uuid: 526f5564b7414bfe978e650d8ea6567b
 ExtensionType: 1
 Name: Nuclei Template Generator Plugin
 RepoName: nuclei-template-generator
-ScreenVersion: 1.1.3
-SerialVersion: 4
-MinPlatformVersion: 0
+ScreenVersion: 1.1.4
+SerialVersion: 5
+MinPlatformVersion: 31
 ProOnly: False
 Author: ProjectDiscovery
 ShortDescription: A plugin intended to help with nuclei template generation.
-EntryPoint: target/nuclei-burp-plugin-1.1.3-SNAPSHOT-jar-with-dependencies.jar
+EntryPoint: nuclei-burp-plugin-0.0.0-SNAPSHOT-jar-with-dependencies.jar
 BuildCommand: mvn clean package -DskipTests=true
 SupportedProducts: Pro, Community
